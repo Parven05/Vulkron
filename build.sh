@@ -101,3 +101,5 @@ else
 	fi
 	exit 0
 fi
+
+./build/src
