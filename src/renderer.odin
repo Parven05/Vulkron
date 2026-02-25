@@ -9,8 +9,13 @@ import "../libs/vkb"
 // glfw
 window: glfw.WindowHandle
 
-// vulkan
 // init
+// vk-bootstrap
+vkb_instance: ^vkb.Instance
+vkb_physical_device: ^vkb.Physical_Device
+vkb_device: ^vkb.Device
+vkb_swapchain: ^vkb.Swapchain
+
 vk_instance: vk.Instance
 vk_surface: vk.SurfaceKHR
 vk_device: vk.Device
@@ -23,11 +28,21 @@ swapchain_format: vk.Format
 swapchain_images: []vk.Image
 swapchain_image_views: []vk.ImageView
 
-// vk-bootstrap
-vkb_instance: ^vkb.Instance
-vkb_physical_device: ^vkb.Physical_Device
-vkb_device: ^vkb.Device
-vkb_swapchain: ^vkb.Swapchain
+// commands & queue
+Frame_Data :: struct {
+	command_pool:        vk.CommandPool,
+	main_command_buffer: vk.CommandBuffer,
+}
+
+FRAME_OVERLAP :: 2
+frames: [FRAME_OVERLAP]Frame_Data
+frame_number: int
+graphics_queue: vk.Queue
+graphics_queue_family: u32
+
+get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
+	return &frames[frame_number % FRAME_OVERLAP]
+}
 
 init_glfw_window :: proc() {
 	glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
@@ -41,11 +56,12 @@ init_glfw_window :: proc() {
 	}
 }
 
-init_vulkan :: proc() {
+start :: proc() {
 	create_instance()
 	if vkb_instance != nil {
 		create_device()
 		create_swapchain()
+		create_commands()
 	}
 }
 
@@ -71,6 +87,8 @@ create_instance :: proc() {
 
 	vkb_instance = inst
 	vk_instance = inst.instance
+
+
 }
 
 create_device :: proc() {
@@ -121,6 +139,26 @@ create_device :: proc() {
 	}
 	vkb_device = dev
 	vk_device = dev.device
+
+	// queue
+	queue, queue_err := vkb.device_get_queue(vkb_device, .Graphics)
+	if queue_err != nil {
+		log.error("Failed to get graphics queue: %#v", queue_err)
+		return
+	} else {
+		log.info("Graphics queue get successfully")
+	}
+
+	queue_family, queue_family_err := vkb.device_get_queue_index(vkb_device, .Graphics)
+	if queue_family_err != nil {
+		log.error("Failed to get graphics family: %#v", queue_family_err)
+		return
+	} else {
+		log.info("Graphics family chosen successfully")
+	}
+
+	graphics_queue = queue
+	graphics_queue_family = queue_family
 }
 
 create_swapchain :: proc() {
@@ -169,12 +207,34 @@ create_swapchain :: proc() {
 	log.info("Swapchain created successfully at", swapchain_extent.width, swapchain_extent.height)
 }
 
-destroy_swapchain :: proc() {
-	vkb.swapchain_destroy_image_views(vkb_swapchain, swapchain_image_views)
-	vkb.destroy_swapchain(vkb_swapchain)
-	delete(swapchain_image_views)
-	delete(swapchain_images)
+create_commands :: proc() {
+
+	command_pool_info := command_pool_create_info(graphics_queue_family, {.RESET_COMMAND_BUFFER})
+
+	for &frame in frames {
+		if !vk_check(
+			vk.CreateCommandPool(vk_device, &command_pool_info, nil, &frame.command_pool),
+		) {
+			log.error("Failed to create command pool")
+			return
+		} else {
+			log.info("Command pool created successfully")
+		}
+
+		cmd_alloc_info := command_buffer_allocate_info(frame.command_pool)
+		if !vk_check(
+			vk.AllocateCommandBuffers(vk_device, &cmd_alloc_info, &frame.main_command_buffer),
+		) {
+			log.error("Failed to allocate command buffer")
+			return
+		} else {
+			log.info("Command buffer allocated successfully")
+		}
+
+	}
+
 }
+
 
 draw :: proc() {
 	for !glfw.WindowShouldClose(window) {
@@ -182,7 +242,21 @@ draw :: proc() {
 	}
 }
 
+destroy_swapchain :: proc() {
+	vkb.swapchain_destroy_image_views(vkb_swapchain, swapchain_image_views)
+	vkb.destroy_swapchain(vkb_swapchain)
+	delete(swapchain_image_views)
+	delete(swapchain_images)
+}
+
 cleanup :: proc() {
+
+	ensure(vk.DeviceWaitIdle(vk_device) == vk.Result.SUCCESS)
+
+	for &frame in frames {
+		vk.DestroyCommandPool(vk_device, frame.command_pool, nil)
+	}
+
 	destroy_swapchain()
 	vkb.destroy_device(vkb_device)
 	vkb.destroy_surface(vkb_instance, vk_surface)

@@ -18,7 +18,7 @@ main :: proc() {
 	if window == nil {return}
 	defer glfw.DestroyWindow(window)
 
-	init_vulkan()
+	start()
 	draw()
 	cleanup()
 
