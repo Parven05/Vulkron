@@ -4,7 +4,6 @@ import "core:log"
 import "vendor:glfw"
 
 main :: proc() {
-
 	context.logger = log.create_console_logger()
 
 	if !glfw.Init() {
@@ -21,5 +20,4 @@ main :: proc() {
 	start()
 	draw()
 	cleanup()
-
 }

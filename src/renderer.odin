@@ -33,16 +33,15 @@ Frame_Data :: struct {
 	command_pool:        vk.CommandPool,
 	main_command_buffer: vk.CommandBuffer,
 }
-
 FRAME_OVERLAP :: 2
 frames: [FRAME_OVERLAP]Frame_Data
 frame_number: int
 graphics_queue: vk.Queue
 graphics_queue_family: u32
 
-get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
-	return &frames[frame_number % FRAME_OVERLAP]
-}
+/* get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
+ 	return &frames[frame_number % FRAME_OVERLAP]
+ }*/
 
 init_glfw_window :: proc() {
 	glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
@@ -88,7 +87,6 @@ create_instance :: proc() {
 	vkb_instance = inst
 	vk_instance = inst.instance
 
-
 }
 
 create_device :: proc() {
@@ -96,7 +94,7 @@ create_device :: proc() {
 		log.error("Failed to create window surface")
 		return
 	} else {
-		log.info("Window surface created")
+		log.info("Window surface created successfully")
 	}
 
 	selector := vkb.create_physical_device_selector(vkb_instance)
@@ -124,6 +122,7 @@ create_device :: proc() {
 	} else {
 		log.info("Physical device selected successfully")
 	}
+
 	vkb_physical_device = phys_dev
 	vk_physical_device = phys_dev.physical_device
 
@@ -137,6 +136,7 @@ create_device :: proc() {
 	} else {
 		log.info("Logical device created successfully")
 	}
+
 	vkb_device = dev
 	vk_device = dev.device
 
@@ -242,6 +242,17 @@ draw :: proc() {
 	}
 }
 
+cleanup :: proc() {
+
+	ensure(vk.DeviceWaitIdle(vk_device) == vk.Result.SUCCESS)
+
+	destroy_command_pool()
+	destroy_swapchain()
+	vkb.destroy_device(vkb_device)
+	vkb.destroy_surface(vkb_instance, vk_surface)
+	vkb.destroy_instance(vkb_instance)
+}
+
 destroy_swapchain :: proc() {
 	vkb.swapchain_destroy_image_views(vkb_swapchain, swapchain_image_views)
 	vkb.destroy_swapchain(vkb_swapchain)
@@ -249,16 +260,8 @@ destroy_swapchain :: proc() {
 	delete(swapchain_images)
 }
 
-cleanup :: proc() {
-
-	ensure(vk.DeviceWaitIdle(vk_device) == vk.Result.SUCCESS)
-
+destroy_command_pool :: proc() {
 	for &frame in frames {
 		vk.DestroyCommandPool(vk_device, frame.command_pool, nil)
 	}
-
-	destroy_swapchain()
-	vkb.destroy_device(vkb_device)
-	vkb.destroy_surface(vkb_instance, vk_surface)
-	vkb.destroy_instance(vkb_instance)
 }
