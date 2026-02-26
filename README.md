@@ -1,10 +1,7 @@
 # Vulkron
 A Vulkan Renderer built using Odin lang
 
-# Progress
-![flashing](image.png)
-
-# Usage
+## Usage
 1. Clone the repository
 ```bash
 git clone https://github.com/Parven05/Vulkron.git
