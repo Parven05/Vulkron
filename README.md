@@ -1,9 +1,13 @@
 # Vulkron
 A Vulkan Renderer built using Odin lang
 
+# Progress
+![flashing](image.png)
+
+# Usage
 1. Clone the repository
 ```bash
-git clone https://github.com/Parven05/OpenGL-Starter.git
+git clone https://github.com/Parven05/Vulkron.git
 ```
 2. Build & Run
 ```bash
