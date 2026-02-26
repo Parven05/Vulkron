@@ -1,2 +1,2 @@
 # Vulkron
-A Vulkan Renderer made in Odin lang
+A Vulkan Renderer built using Odin lang
