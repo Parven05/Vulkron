@@ -270,10 +270,10 @@ init_sync :: proc() {
 		if !vk_check(
 			vk.CreateSemaphore(vk_device, &semaphore_create_info, nil, &frame.render_semaphore),
 		) {
-			log.error("Failed to create semaphore")
+			log.error("Failed to create render semaphore")
 			return
 		} else {
-			log.info("Semaphore created successfully")
+			log.info("Render semaphore created successfully")
 		}
 	}
 }
