@@ -1,6 +1,8 @@
 package vulkron
 
 import "core:log"
+import "core:math"
+
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -28,20 +30,28 @@ swapchain_format: vk.Format
 swapchain_images: []vk.Image
 swapchain_image_views: []vk.ImageView
 
-// commands & queue
 Frame_Data :: struct {
-	command_pool:        vk.CommandPool,
-	main_command_buffer: vk.CommandBuffer,
+	// commands
+	command_pool:          vk.CommandPool,
+	main_command_buffer:   vk.CommandBuffer,
+	// synchronization
+	swapchain_semaphore:   vk.Semaphore,
+	render_semaphore:      vk.Semaphore,
+	render_fence:          vk.Fence,
+	swapchain_image_index: u32,
 }
 FRAME_OVERLAP :: 2
 frames: [FRAME_OVERLAP]Frame_Data
 frame_number: int
+
+// Queue
 graphics_queue: vk.Queue
 graphics_queue_family: u32
 
-/* get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
- 	return &frames[frame_number % FRAME_OVERLAP]
- }*/
+
+get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
+	return &frames[frame_number % FRAME_OVERLAP]
+}
 
 init_glfw_window :: proc() {
 	glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
@@ -61,6 +71,7 @@ start :: proc() {
 		create_device()
 		create_swapchain()
 		create_commands()
+		init_sync()
 	}
 }
 
@@ -235,11 +246,139 @@ create_commands :: proc() {
 
 }
 
+init_sync :: proc() {
+	fence_create_info := fence_create_info({.SIGNALED})
+	semaphore_create_info := semaphore_create_info()
+
+	for &frame in frames {
+		if !vk_check(vk.CreateFence(vk_device, &fence_create_info, nil, &frame.render_fence)) {
+			log.error("Failed to create fence")
+			return
+		} else {
+			log.info("Fence created successfully")
+		}
+
+		if !vk_check(
+			vk.CreateSemaphore(vk_device, &semaphore_create_info, nil, &frame.swapchain_semaphore),
+		) {
+			log.error("Failed to create swapchain semaphore")
+			return
+		} else {
+			log.info("Swapchain semaphore created successfully")
+		}
+
+		if !vk_check(
+			vk.CreateSemaphore(vk_device, &semaphore_create_info, nil, &frame.render_semaphore),
+		) {
+			log.error("Failed to create semaphore")
+			return
+		} else {
+			log.info("Semaphore created successfully")
+		}
+	}
+}
 
 draw :: proc() {
-	for !glfw.WindowShouldClose(window) {
-		glfw.PollEvents()
+	frame := get_current_frame()
+
+	// begin render
+	if !vk_check(vk.WaitForFences(vk_device, 1, &frame.render_fence, true, 1e9)) {return}
+	if !vk_check(vk.ResetFences(vk_device, 1, &frame.render_fence)) {return}
+	log.info("GPU is finished rendering")
+
+	if !vk_check(
+		vk.AcquireNextImageKHR(
+			vk_device,
+			vk_swapchain,
+			1e9,
+			frame.swapchain_semaphore,
+			0,
+			&frame.swapchain_image_index,
+		),
+	) {
+		log.error("Failed to request image from swapchain")
+		return
+	} else {
+		log.info("Request image from swapchain successfully")
 	}
+
+	cmd := frame.main_command_buffer
+
+	if !vk_check(vk.ResetCommandBuffer(cmd, {})) {return}
+
+	cmd_begin_info := command_buffer_begin_info({.ONE_TIME_SUBMIT})
+	if !vk_check(vk.BeginCommandBuffer(cmd, &cmd_begin_info)) {
+		log.error("Failed to begin command buffer recording")
+		return
+	} else {
+		log.info("Begin command bufffer recording successfully")
+	}
+
+	// render starts here
+	transition_image(cmd, swapchain_images[frame.swapchain_image_index], .UNDEFINED, .GENERAL)
+
+	flash := abs(math.sin(f32(frame_number / 5.0)))
+	clear_value := vk.ClearColorValue {
+		float32 = {0.0, 0.0, flash, 1.0},
+	}
+
+	clear_range := image_subresource_range({.COLOR})
+
+	vk.CmdClearColorImage(
+		cmd,
+		swapchain_images[frame.swapchain_image_index],
+		.GENERAL,
+		&clear_value,
+		1,
+		&clear_range,
+	)
+
+	transition_image(
+		cmd,
+		swapchain_images[frame.swapchain_image_index],
+		.GENERAL,
+		.PRESENT_SRC_KHR,
+	)
+
+	if !vk_check(vk.EndCommandBuffer(cmd)) {
+		log.error("Failed to end command buffer recording")
+		return
+	} else {
+		log.info("End command bufffer recording successfully")
+	}
+
+	// submit render
+	cmd_info := command_buffer_submit_info(cmd)
+	signal_info := semaphore_submit_info({.ALL_GRAPHICS}, frame.render_semaphore)
+	wait_info := semaphore_submit_info({.COLOR_ATTACHMENT_OUTPUT_KHR}, frame.swapchain_semaphore)
+
+	submit := submit_info(&cmd_info, &signal_info, &wait_info)
+
+	if !vk_check(vk.QueueSubmit2(graphics_queue, 1, &submit, frame.render_fence)) {
+		log.error("Failed to submit command buffer to the queue")
+		return
+	} else {
+		log.info("Submit command buffer to the queue successfully")
+	}
+
+	// present render
+	present_info := vk.PresentInfoKHR {
+		sType              = .PRESENT_INFO_KHR,
+		pSwapchains        = &vk_swapchain,
+		swapchainCount     = 1,
+		pWaitSemaphores    = &frame.render_semaphore,
+		waitSemaphoreCount = 1,
+		pImageIndices      = &frame.swapchain_image_index,
+	}
+
+	if !vk_check(vk.QueuePresentKHR(graphics_queue, &present_info)) {
+		log.error("Failed to present image")
+		return
+	} else {
+		log.info("Image presented into the screen successfully")
+	}
+
+	frame_number += 1
 }
 
 cleanup :: proc() {
@@ -263,5 +402,10 @@ destroy_swapchain :: proc() {
 destroy_command_pool :: proc() {
 	for &frame in frames {
 		vk.DestroyCommandPool(vk_device, frame.command_pool, nil)
+
+		// destroy sync objects
+		vk.DestroyFence(vk_device, frame.render_fence, nil)
+		vk.DestroySemaphore(vk_device, frame.render_semaphore, nil)
+		vk.DestroySemaphore(vk_device, frame.swapchain_semaphore, nil)
 	}
 }

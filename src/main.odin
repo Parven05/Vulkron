@@ -18,6 +18,11 @@ main :: proc() {
 	defer glfw.DestroyWindow(window)
 
 	start()
-	draw()
+
+	for !glfw.WindowShouldClose(window) {
+		glfw.PollEvents()
+		draw()
+	}
+
 	cleanup()
 }
