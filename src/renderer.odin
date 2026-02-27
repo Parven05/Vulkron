@@ -1,5 +1,6 @@
 package vulkron
 
+import "core:flags"
 import "core:log"
 import "core:math"
 
@@ -7,6 +8,7 @@ import "vendor:glfw"
 import vk "vendor:vulkan"
 
 import "../libs/vkb"
+import "../libs/vma"
 
 // glfw
 window: glfw.WindowHandle
@@ -30,6 +32,10 @@ swapchain_format: vk.Format
 swapchain_images: []vk.Image
 swapchain_image_views: []vk.ImageView
 
+// draw resources
+draw_image: Allocated_Image
+draw_extent: vk.Extent2D
+
 Frame_Data :: struct {
 	// commands
 	command_pool:          vk.CommandPool,
@@ -44,9 +50,12 @@ FRAME_OVERLAP :: 2
 frames: [FRAME_OVERLAP]Frame_Data
 frame_number: int
 
-// Queue
+// queue
 graphics_queue: vk.Queue
 graphics_queue_family: u32
+
+// allocator
+vma_allocator: vma.Allocator
 
 
 get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
@@ -69,6 +78,8 @@ start :: proc() {
 	create_instance()
 	if vkb_instance != nil {
 		create_device()
+		create_queue()
+		create_allocator()
 		create_swapchain()
 		create_commands()
 		init_sync()
@@ -151,6 +162,10 @@ create_device :: proc() {
 	vkb_device = dev
 	vk_device = dev.device
 
+}
+
+create_queue :: proc() {
+
 	// queue
 	queue, queue_err := vkb.device_get_queue(vkb_device, .Graphics)
 	if queue_err != nil {
@@ -170,6 +185,27 @@ create_device :: proc() {
 
 	graphics_queue = queue
 	graphics_queue_family = queue_family
+
+}
+
+create_allocator :: proc() {
+	vma_vulkan_functions := vma.create_vulkan_functions()
+
+	allocator_create_info: vma.Allocator_Create_Info = {
+		flags            = {.Buffer_Device_Address},
+		instance         = vk_instance,
+		physical_device  = vk_physical_device,
+		device           = vk_device,
+		vulkan_functions = &vma_vulkan_functions,
+	}
+
+	if !vk_check(vma.create_allocator(allocator_create_info, &vma_allocator)) {
+		log.error("Failed to create vulkan memory allocator")
+		return
+	} else {
+		log.info("Created vulkan memory allocator successfully")
+	}
+
 }
 
 create_swapchain :: proc() {

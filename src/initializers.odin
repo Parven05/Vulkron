@@ -91,6 +91,40 @@ submit_info :: proc(
 	return info
 }
 
+image_create_info :: proc(
+	format: vk.Format,
+	usageFlags: vk.ImageUsageFlags,
+	extent: vk.Extent3D,
+) -> vk.ImageCreateInfo {
+	info := vk.ImageCreateInfo {
+		sType       = .IMAGE_CREATE_INFO,
+		imageType   = .D2,
+		format      = format,
+		extent      = extent,
+		mipLevels   = 1,
+		arrayLayers = 1,
+		samples     = {._1},
+		tiling      = .OPTIMAL,
+		usage       = usageFlags,
+	}
+	return info
+}
+
+imageview_create_info :: proc(
+	format: vk.Format,
+	image: vk.Image,
+	aspectFlags: vk.ImageAspectFlags,
+) -> vk.ImageViewCreateInfo {
+	info := vk.ImageViewCreateInfo {
+		sType = .IMAGE_VIEW_CREATE_INFO,
+		viewType = .D2,
+		image = image,
+		format = format,
+		subresourceRange = {levelCount = 1, layerCount = 1, aspectMask = aspectFlags},
+	}
+	return info
+}
+
 image_subresource_range :: proc(aspectMask: vk.ImageAspectFlags) -> vk.ImageSubresourceRange {
 	subImage := vk.ImageSubresourceRange {
 		aspectMask = aspectMask,
