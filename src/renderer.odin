@@ -57,7 +57,6 @@ graphics_queue_family: u32
 // allocator
 vma_allocator: vma.Allocator
 
-
 get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
 	return &frames[frame_number % FRAME_OVERLAP]
 }
