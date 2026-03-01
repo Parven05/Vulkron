@@ -57,6 +57,11 @@ graphics_queue_family: u32
 // allocator
 vma_allocator: vma.Allocator
 
+// descriptors
+global_descriptor_allocator: Descriptor_Allocator
+draw_image_descriptors: vk.DescriptorSet
+draw_image_descriptor_layout: vk.DescriptorSetLayout
+
 get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
 	return &frames[frame_number % FRAME_OVERLAP]
 }
@@ -82,6 +87,7 @@ start :: proc() {
 		create_swapchain()
 		create_commands()
 		init_sync()
+		init_descriptors()
 	}
 }
 
@@ -251,6 +257,59 @@ create_swapchain :: proc() {
 	}
 
 	log.info("Swapchain created successfully at", swapchain_extent.width, swapchain_extent.height)
+
+	// draw image
+	draw_image_extent := vk.Extent3D {
+		width  = swapchain_extent.width,
+		height = swapchain_extent.height,
+		depth  = 1,
+	}
+
+	draw_image.image_format = .R16G16B16A16_SFLOAT
+	draw_image.image_extent = draw_image_extent
+	draw_image.allocator = vma_allocator
+	draw_image.device = vk_device
+
+	draw_image_usages := vk.ImageUsageFlags {
+		.TRANSFER_SRC,
+		.TRANSFER_DST,
+		.STORAGE,
+		.COLOR_ATTACHMENT,
+	}
+
+	rimg_info := image_create_info(draw_image.image_format, draw_image_usages, draw_image_extent)
+
+	// draw image allocated from GPU memory
+	rimg_allocinfo := vma.Allocation_Create_Info {
+		usage          = .Gpu_Only,
+		required_flags = {.DEVICE_LOCAL},
+	}
+
+	if !vk_check(
+		vma.create_image(
+			vma_allocator,
+			rimg_info,
+			rimg_allocinfo,
+			&draw_image.image,
+			&draw_image.allocation,
+			nil,
+		),
+	) {
+		log.error("Failed to allocated and create draw image")
+		return
+	} else {
+		log.info("Allocated and created draw image successfully")
+	}
+
+	rview_info := imageview_create_info(draw_image.image_format, draw_image.image, {.COLOR})
+
+	if !vk_check(vk.CreateImageView(vk_device, &rview_info, nil, &draw_image.image_view)) {
+		log.error("Failed to create draw image view")
+		return
+	} else {
+		log.info("Created draw image view successfully")
+	}
+
 }
 
 create_commands :: proc() {
@@ -313,6 +372,42 @@ init_sync :: proc() {
 	}
 }
 
+init_descriptors :: proc() {
+	sizes := []Pool_Size_Ratio{{.STORAGE_IMAGE, 1}}
+
+	descriptor_allocator_init_pool(&global_descriptor_allocator, vk_device, 10, sizes)
+
+	builder: Descriptor_Layout_Builder
+	descriptor_layout_builder_init(&builder, vk_device)
+	descriptor_layout_builder_add_binding(&builder, 0, .STORAGE_IMAGE)
+	draw_image_descriptor_layout = descriptor_layout_builder_build(&builder, {.COMPUTE})
+
+	// Allocate a descriptor set for our draw image
+	draw_image_descriptors = descriptor_allocator_allocate(
+		&global_descriptor_allocator,
+		vk_device,
+		&draw_image_descriptor_layout,
+	)
+
+	img_info := vk.DescriptorImageInfo {
+		imageLayout = .GENERAL,
+		imageView   = draw_image.image_view,
+	}
+
+	draw_image_write := vk.WriteDescriptorSet {
+		sType           = .WRITE_DESCRIPTOR_SET,
+		dstBinding      = 0,
+		dstSet          = draw_image_descriptors,
+		descriptorCount = 1,
+		descriptorType  = .STORAGE_IMAGE,
+		pImageInfo      = &img_info,
+	}
+
+	vk.UpdateDescriptorSets(vk_device, 1, &draw_image_write, 0, nil)
+	log.info("Descriptor sets updated successfully")
+
+}
+
 draw :: proc() {
 	frame := get_current_frame()
 
@@ -340,8 +435,11 @@ draw :: proc() {
 	cmd := frame.main_command_buffer
 
 	if !vk_check(vk.ResetCommandBuffer(cmd, {})) {return}
-
 	cmd_begin_info := command_buffer_begin_info({.ONE_TIME_SUBMIT})
+
+	draw_extent.width = draw_image.image_extent.width
+	draw_extent.height = draw_image.image_extent.height
+
 	if !vk_check(vk.BeginCommandBuffer(cmd, &cmd_begin_info)) {
 		log.error("Failed to begin command buffer recording")
 		return
@@ -359,19 +457,27 @@ draw :: proc() {
 
 	clear_range := image_subresource_range({.COLOR})
 
-	vk.CmdClearColorImage(
-		cmd,
-		swapchain_images[frame.swapchain_image_index],
-		.GENERAL,
-		&clear_value,
-		1,
-		&clear_range,
-	)
+	vk.CmdClearColorImage(cmd, draw_image.image, .GENERAL, &clear_value, 1, &clear_range)
 
 	transition_image(
 		cmd,
 		swapchain_images[frame.swapchain_image_index],
 		.GENERAL,
+		.PRESENT_SRC_KHR,
+	)
+
+	copy_image_to_image(
+		cmd,
+		draw_image.image,
+		swapchain_images[frame.swapchain_image_index],
+		draw_extent,
+		swapchain_extent,
+	)
+
+	transition_image(
+		cmd,
+		swapchain_images[frame.swapchain_image_index],
+		.COLOR_ATTACHMENT_OPTIMAL,
 		.PRESENT_SRC_KHR,
 	)
 
@@ -420,11 +526,19 @@ cleanup :: proc() {
 
 	ensure(vk.DeviceWaitIdle(vk_device) == vk.Result.SUCCESS)
 
+	destroy_descriptors()
 	destroy_command_pool()
 	destroy_swapchain()
+	destroy_init()
+
+}
+
+destroy_init :: proc() {
+
 	vkb.destroy_device(vkb_device)
 	vkb.destroy_surface(vkb_instance, vk_surface)
 	vkb.destroy_instance(vkb_instance)
+
 }
 
 destroy_swapchain :: proc() {
@@ -432,6 +546,10 @@ destroy_swapchain :: proc() {
 	vkb.destroy_swapchain(vkb_swapchain)
 	delete(swapchain_image_views)
 	delete(swapchain_images)
+
+	vma.destroy_image(vma_allocator, draw_image.image, nil)
+	vk.DestroyImageView(vk_device, draw_image.image_view, nil)
+
 }
 
 destroy_command_pool :: proc() {
@@ -443,4 +561,8 @@ destroy_command_pool :: proc() {
 		vk.DestroySemaphore(vk_device, frame.render_semaphore, nil)
 		vk.DestroySemaphore(vk_device, frame.swapchain_semaphore, nil)
 	}
+}
+
+destroy_descriptors :: proc() {
+	vk.DestroyDescriptorPool(vk_device, global_descriptor_allocator.pool, nil)
 }
