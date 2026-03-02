@@ -62,6 +62,10 @@ global_descriptor_allocator: Descriptor_Allocator
 draw_image_descriptors: vk.DescriptorSet
 draw_image_descriptor_layout: vk.DescriptorSetLayout
 
+// pipeline
+gradient_pipeline: vk.Pipeline
+gradient_pipeline_layout: vk.PipelineLayout
+
 get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
 	return &frames[frame_number % FRAME_OVERLAP]
 }
@@ -88,6 +92,7 @@ start :: proc() {
 		create_commands()
 		init_sync()
 		init_descriptors()
+		init_pipelines()
 	}
 }
 
@@ -375,19 +380,38 @@ init_sync :: proc() {
 init_descriptors :: proc() {
 	sizes := []Pool_Size_Ratio{{.STORAGE_IMAGE, 1}}
 
-	descriptor_allocator_init_pool(&global_descriptor_allocator, vk_device, 10, sizes)
+	if !descriptor_allocator_init_pool(&global_descriptor_allocator, vk_device, 10, sizes) {
+		log.error("Failed to initialize global descriptor pool")
+		return
+	} else {
+		log.info("Initialize global descriptor pool successfully")
+	}
 
 	builder: Descriptor_Layout_Builder
 	descriptor_layout_builder_init(&builder, vk_device)
 	descriptor_layout_builder_add_binding(&builder, 0, .STORAGE_IMAGE)
-	draw_image_descriptor_layout = descriptor_layout_builder_build(&builder, {.COMPUTE})
+
+	ok: bool
+	draw_image_descriptor_layout, ok = descriptor_layout_builder_build(&builder, {.COMPUTE})
+	if !ok {
+		log.error("Failed to build draw image descriptor layout")
+		return
+	} else {
+		log.info("Draw image descriptor layout build successfully")
+	}
 
 	// Allocate a descriptor set for our draw image
-	draw_image_descriptors = descriptor_allocator_allocate(
+	draw_image_descriptors, ok = descriptor_allocator_allocate(
 		&global_descriptor_allocator,
 		vk_device,
 		&draw_image_descriptor_layout,
 	)
+	if !ok {
+		log.error("Failed to allocate draw image descriptor set")
+		return
+	} else {
+		log.info("Draw image descriptor set allocated successfully")
+	}
 
 	img_info := vk.DescriptorImageInfo {
 		imageLayout = .GENERAL,
@@ -406,6 +430,68 @@ init_descriptors :: proc() {
 	vk.UpdateDescriptorSets(vk_device, 1, &draw_image_write, 0, nil)
 	log.info("Descriptor sets updated successfully")
 
+}
+
+init_pipelines :: proc() {
+
+	compute_layout := vk.PipelineLayoutCreateInfo {
+		sType          = .PIPELINE_LAYOUT_CREATE_INFO,
+		pSetLayouts    = &draw_image_descriptor_layout,
+		setLayoutCount = 1,
+	}
+
+	if !vk_check(
+		vk.CreatePipelineLayout(vk_device, &compute_layout, nil, &gradient_pipeline_layout),
+	) {
+		log.error("Failed to create pipeline layout")
+		return
+	} else {
+		log.info("Pipeline layout created successfully")
+	}
+
+	init_compute_pipeline()
+
+}
+
+init_compute_pipeline :: proc() {
+
+	GRADIENT_COMP_SPV :: #load("../shaders/compiled/gradient.comp.spv")
+
+	gradient_shader, ok := create_shader_module(vk_device, GRADIENT_COMP_SPV)
+	if !ok {
+		log.error("Failed to create shader module")
+	} else {
+		log.info("Shader module created successfully")
+	}
+	defer vk.DestroyShaderModule(vk_device, gradient_shader, nil)
+
+	stage_info := vk.PipelineShaderStageCreateInfo {
+		sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+		stage  = {.COMPUTE},
+		module = gradient_shader,
+		pName  = "main",
+	}
+
+	compute_pipeline_create_info := vk.ComputePipelineCreateInfo {
+		sType  = .COMPUTE_PIPELINE_CREATE_INFO,
+		layout = gradient_pipeline_layout,
+		stage  = stage_info,
+	}
+
+	if !vk_check(
+		vk.CreateComputePipelines(
+			vk_device,
+			0,
+			1,
+			&compute_pipeline_create_info,
+			nil,
+			&gradient_pipeline,
+		),
+	) {
+		log.error("Failed to create compute pipeline")
+	} else {
+		log.info("Compute pipeline created successfully")
+	}
 }
 
 draw :: proc() {
@@ -450,14 +536,34 @@ draw :: proc() {
 	// render starts here
 	transition_image(cmd, swapchain_images[frame.swapchain_image_index], .UNDEFINED, .GENERAL)
 
-	flash := abs(math.sin(f32(frame_number / 5.0)))
-	clear_value := vk.ClearColorValue {
-		float32 = {0.0, 0.0, flash, 1.0},
-	}
+	// flash := abs(math.sin(f32(frame_number / 5.0)))
+	// clear_value := vk.ClearColorValue {
+	// 	float32 = {0.0, 0.0, flash, 1.0},
+	// }
 
-	clear_range := image_subresource_range({.COLOR})
+	// clear_range := image_subresource_range({.COLOR})
 
-	vk.CmdClearColorImage(cmd, draw_image.image, .GENERAL, &clear_value, 1, &clear_range)
+	// vk.CmdClearColorImage(cmd, draw_image.image, .GENERAL, &clear_value, 1, &clear_range)
+
+	vk.CmdBindPipeline(cmd, .COMPUTE, gradient_pipeline)
+
+	vk.CmdBindDescriptorSets(
+		cmd,
+		.COMPUTE,
+		gradient_pipeline_layout,
+		0,
+		1,
+		&draw_image_descriptors,
+		0,
+		nil,
+	)
+
+	vk.CmdDispatch(
+		cmd,
+		u32(math.ceil_f32(f32(draw_extent.width) / 16.0)),
+		u32(math.ceil_f32(f32(draw_extent.height) / 16.0)),
+		1,
+	)
 
 	transition_image(
 		cmd,
@@ -526,6 +632,7 @@ cleanup :: proc() {
 
 	ensure(vk.DeviceWaitIdle(vk_device) == vk.Result.SUCCESS)
 
+	destroy_pipelines()
 	destroy_descriptors()
 	destroy_command_pool()
 	destroy_swapchain()
@@ -565,4 +672,9 @@ destroy_command_pool :: proc() {
 
 destroy_descriptors :: proc() {
 	vk.DestroyDescriptorPool(vk_device, global_descriptor_allocator.pool, nil)
+}
+
+destroy_pipelines :: proc() {
+	vk.DestroyPipelineLayout(vk_device, gradient_pipeline_layout, nil)
+	vk.DestroyPipeline(vk_device, gradient_pipeline, nil)
 }
