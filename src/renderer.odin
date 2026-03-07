@@ -7,7 +7,6 @@ import "core:math"
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
-// import ""
 import "../libs/vkb"
 import "../libs/vma"
 
