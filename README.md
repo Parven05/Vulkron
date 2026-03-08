@@ -1,5 +1,5 @@
 # Vulkron
-A Vulkan Renderer built using Odin lang
+A Vulkan-based graphics renderer written in Odin focused on rendering experiments and performance.
 
 ## Progress
 > Setup ready a working compute pipeline
