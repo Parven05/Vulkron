@@ -1,5 +1,5 @@
 # Vulkron
-A Vulkan-based graphics renderer written in Odin focused on rendering experiments and performance.
+A Vulkan renderer written in Odin, primarily designed for compute shaders.
 
 ## Progress
 > Setup ready a working compute pipeline
